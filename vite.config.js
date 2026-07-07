@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react'
 
 // GITHUB_PAGES_BASE deve ser definido no GitHub Actions como '/nome-do-repo/'
 // Em localhost (npm run dev) usa '/'
-const base = process.env.GITHUB_PAGES_BASE ?? '/biblioteca_proibida/'
+const base = '/biblioteca_proibida/'
 
 export default defineConfig({
   plugins: [react()],
