@@ -1,24 +1,23 @@
-/**
- * App.jsx — Projeto Biblioteca (Fases 1–6 completas)
- *
- * Roteamento principal com HashRouter (GitHub Pages compatível).
- * Providers aninhados na ordem correta:
- *   AuthProvider → ToastProvider → NavigationProvider → CollaborationProvider
- *
- * A integração do AppShellV6 (Fase 6) é feita dentro de LibraryView,
- * que já possui acesso ao libraryId, pages, databases e currentUser.
- * Aqui apenas garantimos que o AuthContext expõe o currentUser no
- * formato esperado pelos contextos de colaboração.
- */
 import React from 'react'
-import { Routes, Route } from 'react-router-dom'
+import { Routes, Route, useParams } from 'react-router-dom'
 import { AuthProvider, useAuth } from './contexts/AuthContext.jsx'
 import { ToastProvider }         from './components/ui/Toast.jsx'
+import { DatabaseProvider }      from './contexts/DatabaseContext.jsx'
 import LoginScreen  from './components/layout/LoginScreen.jsx'
 import LibraryGrid  from './components/layout/LibraryGrid.jsx'
 import LibraryView  from './components/layout/LibraryView.jsx'
 import PageEditor   from './components/editor/PageEditor.jsx'
 import DatabaseView from './components/database/DatabaseView.jsx'
+
+function DatabaseRoute() {
+  const { libId, dbId } = useParams()
+  const { token } = useAuth()
+  return (
+    <DatabaseProvider libraryId={libId} databaseId={dbId} accessToken={token}>
+      <DatabaseView />
+    </DatabaseProvider>
+  )
+}
 
 function NotFound() {
   return (
@@ -49,7 +48,7 @@ function AppRoutes() {
       <Route path="/"                                    element={<LibraryGrid />} />
       <Route path="/biblioteca/:libId"                   element={<LibraryView />} />
       <Route path="/biblioteca/:libId/pagina/:pageId"    element={<PageEditor />} />
-      <Route path="/biblioteca/:libId/database/:dbId"    element={<DatabaseView />} />
+      <Route path="/biblioteca/:libId/database/:dbId"    element={<DatabaseRoute />} />
       <Route path="*"                                    element={<NotFound />} />
     </Routes>
   )
