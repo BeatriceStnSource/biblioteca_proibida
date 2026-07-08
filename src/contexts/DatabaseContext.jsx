@@ -1,8 +1,9 @@
 /**
  * DatabaseContext.jsx — Atualizado na Fase 4
  *
- * FIX: openDatabase agora aceita tanto schema.id quanto folderId.
- * FIX: Provider auto-abre o database quando databaseId prop é fornecido.
+ * FIX v2: guards contra undefined em computedItems/filteredItems/groupedItems
+ * FIX: openDatabase aceita folderId ou schema.id
+ * FIX: auto-abre database quando databaseId prop é fornecida
  */
 
 import {
@@ -28,8 +29,6 @@ import {
 import { PROPERTY_TYPES, VIEW_TYPES } from '../lib/constants.js'
 import { evaluateConditionalColor } from '../lib/formula.js'
 
-// ─── Context ──────────────────────────────────────────────────────
-
 const DatabaseContext = createContext(null)
 
 export function useDatabaseContext() {
@@ -38,26 +37,19 @@ export function useDatabaseContext() {
   return ctx
 }
 
-// ─── Provider ─────────────────────────────────────────────────────
-
 export function DatabaseProvider({ libraryId, databaseId, accessToken, children }) {
-  // Lista de databases desta biblioteca
-  const [databases, setDatabases]     = useState([])
-  const [loading, setLoading]         = useState(true)
-  const [error, setError]             = useState(null)
-
-  // Database aberto no momento
-  const [activeDbId, setActiveDbId]   = useState(null)
-  const [items, setItems]             = useState([])
+  const [databases, setDatabases]       = useState([])
+  const [loading, setLoading]           = useState(true)
+  const [error, setError]               = useState(null)
+  const [activeDbId, setActiveDbId]     = useState(null)
+  const [items, setItems]               = useState([])
   const [itemsLoading, setItemsLoading] = useState(false)
-
-  // View ativa
   const [activeViewId, setActiveViewId] = useState(null)
-
-  // Dados de databases relacionados
-  const [relatedData, setRelatedData] = useState({})
+  const [relatedData, setRelatedData]   = useState({})
 
   const saveSchemaDebounce = useRef(null)
+  // Evita double-open em StrictMode / re-renders
+  const openingRef = useRef(null)
 
   // ─── Carregar lista de databases ──────────────────────────────
 
@@ -65,61 +57,72 @@ export function DatabaseProvider({ libraryId, databaseId, accessToken, children 
     if (!libraryId || !accessToken) return
     setLoading(true)
     listDatabases(libraryId, accessToken)
-      .then(dbs => { setDatabases(dbs); setLoading(false) })
-      .catch(err => { setError(err.message); setLoading(false) })
+      .then(dbs => {
+        setDatabases(dbs)
+        setLoading(false)
+      })
+      .catch(err => {
+        setError(err.message)
+        setLoading(false)
+      })
   }, [libraryId, accessToken])
 
-  // ─── Auto-abrir database quando prop databaseId é fornecida ──
-  // FIX: dispara openDatabase assim que databases carrega e databaseId está definido
+  // ─── Auto-abrir database quando databaseId prop é fornecida ──
 
   useEffect(() => {
     if (!databaseId || databases.length === 0) return
 
-    // Aceita tanto folderId quanto schema.id
+    // Aceita folderId ou schema.id
     const db = databases.find(
-      d => d.folderId === databaseId || d.schema.id === databaseId
+      d => d.folderId === databaseId || d.schema?.id === databaseId
     )
-    if (!db) return
+    if (!db || !db.schema?.id) return
 
-    const idToOpen = db.schema.id
-    if (idToOpen !== activeDbId) {
-      openDatabase(idToOpen)
-    }
+    const targetId = db.schema.id
+    // Só abre se for diferente do atual e não estiver já abrindo
+    if (targetId === activeDbId || openingRef.current === targetId) return
+
+    openDatabase(targetId)
+  // openDatabase é estável via useCallback — ok incluir
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [databaseId, databases])
 
   // ─── Abrir database ───────────────────────────────────────────
 
   const openDatabase = useCallback(async (dbId) => {
-    // FIX: aceita tanto schema.id quanto folderId
     const db = databases.find(
-      d => d.schema.id === dbId || d.folderId === dbId
+      d => d.schema?.id === dbId || d.folderId === dbId
     )
-    if (!db) return
+    if (!db || !db.schema) return
 
+    openingRef.current = db.schema.id
     setActiveDbId(db.schema.id)
+    setItems([])           // limpa itens anteriores
     setItemsLoading(true)
 
-    // View padrão
     const firstView = db.schema.views?.[0]
     if (firstView) setActiveViewId(firstView.id)
 
     try {
       const rawItems = await listDatabaseItems(db.folderId, accessToken)
-      await loadRelatedDatabases(db.schema, rawItems)
-      setItems(rawItems)
+      // Garante que todos os itens são objetos válidos
+      const validItems = (rawItems ?? []).filter(i => i && typeof i === 'object')
+      await loadRelatedDatabases(db.schema, validItems)
+      setItems(validItems)
     } catch (err) {
+      console.error('[DatabaseContext] Erro ao carregar itens:', err)
       setError(err.message)
     } finally {
       setItemsLoading(false)
+      openingRef.current = null
     }
   }, [databases, accessToken])
 
   // ─── Carregar databases relacionados ─────────────────────────
 
   async function loadRelatedDatabases(schema, currentItems) {
-    const relationProps = (schema.properties ?? []).filter(p => p.type === PROPERTY_TYPES.RELATION)
-    const rollupProps   = (schema.properties ?? []).filter(p => p.type === PROPERTY_TYPES.ROLLUP)
+    const relationProps = (schema?.properties ?? []).filter(p => p.type === PROPERTY_TYPES.RELATION)
+    const rollupProps   = (schema?.properties ?? []).filter(p => p.type === PROPERTY_TYPES.ROLLUP)
 
     const needed = new Set()
     relationProps.forEach(p => { if (p.targetDatabaseId) needed.add(p.targetDatabaseId) })
@@ -130,45 +133,61 @@ export function DatabaseProvider({ libraryId, databaseId, accessToken, children 
 
     for (const dbId of needed) {
       if (relatedData[dbId]) continue
-      const db = databases.find(d => d.schema.id === dbId)
+      const db = databases.find(d => d.schema?.id === dbId)
       if (!db) continue
       try {
         const relItems = await listDatabaseItems(db.folderId, accessToken)
-        setRelatedData(prev => ({ ...prev, [dbId]: { schema: db.schema, items: relItems } }))
-      } catch { /* ignora silenciosamente */ }
+        setRelatedData(prev => ({ ...prev, [dbId]: { schema: db.schema, items: relItems ?? [] } }))
+      } catch { /* silencioso */ }
     }
   }
 
-  // ─── Computed items ───────────────────────────────────────────
+  // ─── Computed items com guards ────────────────────────────────
 
   function getComputedItems(rawItems, schema) {
-    if (!schema) return rawItems
-    return rawItems.map(item =>
-      computeDerivedValues(item, schema, rawItems, relatedData)
-    )
+    if (!schema || !Array.isArray(rawItems)) return []
+    return rawItems
+      .filter(item => item && typeof item === 'object' && item.properties !== undefined)
+      .map(item => {
+        try {
+          return computeDerivedValues(item, schema, rawItems, relatedData)
+        } catch {
+          return item
+        }
+      })
   }
 
-  // ─── Database ativo e view ativa ─────────────────────────────
+  // ─── Derivações com guards ────────────────────────────────────
 
-  const activeDatabase = databases.find(d => d.schema.id === activeDbId) ?? null
+  const activeDatabase = databases.find(d => d.schema?.id === activeDbId) ?? null
   const activeSchema   = activeDatabase?.schema ?? null
   const activeView     = activeSchema?.views?.find(v => v.id === activeViewId) ?? null
 
-  const computedItems  = activeSchema
-    ? getComputedItems(items, activeSchema)
-    : items
+  const computedItems = getComputedItems(items, activeSchema)
 
-  const filteredItems = activeView
-    ? applySorts(
-        applyFilters(computedItems, activeView.filters, activeSchema?.properties ?? []),
-        activeView.sorts,
-        activeSchema?.properties ?? [],
+  const filteredItems = (() => {
+    if (!activeView || !activeSchema) return computedItems
+    try {
+      return applySorts(
+        applyFilters(computedItems, activeView.filters ?? [], activeSchema.properties ?? []),
+        activeView.sorts ?? [],
+        activeSchema.properties ?? [],
       )
-    : computedItems
+    } catch {
+      return computedItems
+    }
+  })()
 
-  const groupedItems = activeView
-    ? applyGrouping(filteredItems, activeView.groupBy, activeSchema?.properties ?? [])
-    : [{ key: '__all__', label: 'Todos', color: null, items: filteredItems }]
+  const groupedItems = (() => {
+    if (!activeView || !activeSchema) {
+      return [{ key: '__all__', label: 'Todos', color: null, items: filteredItems }]
+    }
+    try {
+      return applyGrouping(filteredItems, activeView.groupBy, activeSchema.properties ?? [])
+    } catch {
+      return [{ key: '__all__', label: 'Todos', color: null, items: filteredItems }]
+    }
+  })()
 
   // ─── CRUD de databases ────────────────────────────────────────
 
@@ -183,10 +202,7 @@ export function DatabaseProvider({ libraryId, databaseId, accessToken, children 
   function scheduleSchemaUpdate(newSchema) {
     if (!activeDatabase) return
     setDatabases(prev =>
-      prev.map(d => d.schema.id === activeDbId
-        ? { ...d, schema: newSchema }
-        : d
-      )
+      prev.map(d => d.schema?.id === activeDbId ? { ...d, schema: newSchema } : d)
     )
     clearTimeout(saveSchemaDebounce.current)
     saveSchemaDebounce.current = setTimeout(async () => {
@@ -202,75 +218,56 @@ export function DatabaseProvider({ libraryId, databaseId, accessToken, children 
     if (!activeSchema) return
     const newProp = createProperty(name, type, extras)
     newProp.order = activeSchema.properties.length
-    const newSchema = {
-      ...activeSchema,
-      properties: [...activeSchema.properties, newProp],
-    }
-    scheduleSchemaUpdate(newSchema)
+    scheduleSchemaUpdate({ ...activeSchema, properties: [...activeSchema.properties, newProp] })
     return newProp
   }
 
   function updateProperty(propId, patch) {
     if (!activeSchema) return
-    const newSchema = {
+    scheduleSchemaUpdate({
       ...activeSchema,
-      properties: activeSchema.properties.map(p =>
-        p.id === propId ? { ...p, ...patch } : p
-      ),
-    }
-    scheduleSchemaUpdate(newSchema)
+      properties: activeSchema.properties.map(p => p.id === propId ? { ...p, ...patch } : p),
+    })
   }
 
   function deleteProperty(propId) {
     if (!activeSchema) return
-    const newSchema = {
+    scheduleSchemaUpdate({
       ...activeSchema,
-      properties: activeSchema.properties
-        .filter(p => p.id !== propId)
-        .map((p, i) => ({ ...p, order: i })),
-    }
-    scheduleSchemaUpdate(newSchema)
+      properties: activeSchema.properties.filter(p => p.id !== propId).map((p, i) => ({ ...p, order: i })),
+    })
   }
 
   function reorderProperties(orderedIds) {
     if (!activeSchema) return
     const map = Object.fromEntries(activeSchema.properties.map(p => [p.id, p]))
-    const newSchema = {
+    scheduleSchemaUpdate({
       ...activeSchema,
       properties: orderedIds.map((id, i) => ({ ...map[id], order: i })),
-    }
-    scheduleSchemaUpdate(newSchema)
+    })
   }
 
   function addView(name, type) {
     if (!activeSchema) return
     const newView = createView(name, type)
     newView.order = activeSchema.views.length
-    const newSchema = {
-      ...activeSchema,
-      views: [...activeSchema.views, newView],
-    }
-    scheduleSchemaUpdate(newSchema)
+    scheduleSchemaUpdate({ ...activeSchema, views: [...activeSchema.views, newView] })
     setActiveViewId(newView.id)
     return newView
   }
 
   function updateView(viewId, patch) {
     if (!activeSchema) return
-    const newSchema = {
+    scheduleSchemaUpdate({
       ...activeSchema,
-      views: activeSchema.views.map(v =>
-        v.id === viewId ? { ...v, ...patch } : v
-      ),
-    }
-    scheduleSchemaUpdate(newSchema)
+      views: activeSchema.views.map(v => v.id === viewId ? { ...v, ...patch } : v),
+    })
   }
 
   function deleteView(viewId) {
     if (!activeSchema) return
     const remaining = activeSchema.views.filter(v => v.id !== viewId)
-    const newSchema  = { ...activeSchema, views: remaining }
-    scheduleSchemaUpdate(newSchema)
+    scheduleSchemaUpdate({ ...activeSchema, views: remaining })
     if (activeViewId === viewId) setActiveViewId(remaining[0]?.id ?? null)
   }
 
@@ -299,9 +296,7 @@ export function DatabaseProvider({ libraryId, databaseId, accessToken, children 
     let mergedProps = { ...initialProps }
     if (templateId) {
       const tpl = (activeSchema.templates ?? []).find(t => t.id === templateId)
-      if (tpl) {
-        mergedProps = { ...tpl.defaultProperties, ...initialProps }
-      }
+      if (tpl) mergedProps = { ...tpl.defaultProperties, ...initialProps }
     }
 
     const titleProp = activeSchema.properties.find(p => p.type === PROPERTY_TYPES.TITLE)
@@ -310,12 +305,7 @@ export function DatabaseProvider({ libraryId, databaseId, accessToken, children 
     }
 
     const { item: newItem, schema: updatedSchema } =
-      await createDatabaseItem_drive(
-        activeDatabase.folderId,
-        activeSchema,
-        mergedProps,
-        accessToken,
-      )
+      await createDatabaseItem_drive(activeDatabase.folderId, activeSchema, mergedProps, accessToken)
 
     setItems(prev => [...prev, newItem])
 
@@ -345,25 +335,28 @@ export function DatabaseProvider({ libraryId, databaseId, accessToken, children 
   }
 
   async function updateItemDate(item, datePropId, newDateStr) {
-    const updated = {
+    await updateItem({
       ...item,
       properties: {
         ...item.properties,
         [datePropId]: { type: PROPERTY_TYPES.DATE, value: newDateStr },
       },
-    }
-    await updateItem(updated)
+    })
   }
 
   // ─── Helpers ─────────────────────────────────────────────────
 
   function getItemColor(item) {
-    if (!activeView?.conditionalColors?.length || !activeSchema) return null
-    return evaluateConditionalColor(item, activeView.conditionalColors, activeSchema, computedItems)
+    if (!activeView?.conditionalColors?.length || !activeSchema || !item) return null
+    try {
+      return evaluateConditionalColor(item, activeView.conditionalColors, activeSchema, computedItems)
+    } catch {
+      return null
+    }
   }
 
   function getComputedValue(item, propId) {
-    return item._computed?.[propId] ?? null
+    return item?._computed?.[propId] ?? null
   }
 
   // ─── Context value ────────────────────────────────────────────
