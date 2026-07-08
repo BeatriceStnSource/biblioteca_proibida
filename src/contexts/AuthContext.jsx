@@ -17,9 +17,7 @@ export function AuthProvider({ children }) {
       if (!window.gapi) { setTimeout(loadGapi, 200); return }
       window.gapi.load('client', async () => {
         await window.gapi.client.init({})
-        await window.gapi.client.load(
-          'https://www.googleapis.com/discovery/v1/apis/drive/v3/rest'
-        )
+        await window.gapi.client.load('https://www.googleapis.com/discovery/v1/apis/drive/v3/rest')
         setGapiReady(true)
       })
     }
@@ -29,7 +27,6 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     function loadGis() {
       if (!window.google?.accounts?.oauth2) { setTimeout(loadGis, 200); return }
-
       initTokenClient(
         GOOGLE_CLIENT_ID,
         DRIVE_SCOPE,
@@ -38,18 +35,10 @@ export function AuthProvider({ children }) {
           setAccessToken(accessToken)
           fetchUserInfo(accessToken)
         },
-        (err) => {
-          console.info('[Auth] Login silencioso falhou, aguardando clique manual.')
-          setLoading(false)
-        }
+        () => { setLoading(false) }
       )
-
       setGisReady(true)
-
-      // Login silencioso — não mostra popup se sessão Google ainda ativa
-      setTimeout(() => {
-        try { requestToken('') } catch { /* usuário vai clicar manualmente */ }
-      }, 800)
+      setTimeout(() => { try { requestToken('') } catch {} }, 800)
     }
     loadGis()
   }, [])
@@ -70,10 +59,7 @@ export function AuthProvider({ children }) {
     }
   }
 
-  const signIn = useCallback(() => {
-    setError(null)
-    requestToken('consent')
-  }, [])
+  const signIn = useCallback(() => { setError(null); requestToken('consent') }, [])
 
   const signOut = useCallback(() => {
     if (token && window.google?.accounts?.oauth2) {
@@ -85,4 +71,18 @@ export function AuthProvider({ children }) {
   }, [token])
 
   return (
-    <AuthContext.Provider
+    <AuthContext.Provider value={{
+      user, token,
+      isAuthenticated: Boolean(user && token),
+      loading, error, signIn, signOut
+    }}>
+      {children}
+    </AuthContext.Provider>
+  )
+}
+
+export function useAuth() {
+  const ctx = useContext(AuthContext)
+  if (!ctx) throw new Error('useAuth deve ser usado dentro de AuthProvider')
+  return ctx
+}
