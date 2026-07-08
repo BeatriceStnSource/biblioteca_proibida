@@ -1,9 +1,13 @@
 /**
  * DatabaseContext.jsx — Atualizado na Fase 4
  *
- * FIX v2: guards contra undefined em computedItems/filteredItems/groupedItems
- * FIX: openDatabase aceita folderId ou schema.id
- * FIX: auto-abre database quando databaseId prop é fornecida
+ * Novidades em relação à Fase 3:
+ *  - carrega relatedData (databases relacionados via Relation)
+ *  - computeDerivedValues para fórmulas e rollups
+ *  - suporte a templates na schema
+ *  - applyTemplate ao criar item
+ *  - coloração condicional via evaluateConditionalColor
+ *  - updateItemDate (utilitário para CalendarView drag)
  */
 
 import {
@@ -29,6 +33,8 @@ import {
 import { PROPERTY_TYPES, VIEW_TYPES } from '../lib/constants.js'
 import { evaluateConditionalColor } from '../lib/formula.js'
 
+// ─── Context ──────────────────────────────────────────────────────
+
 const DatabaseContext = createContext(null)
 
 export function useDatabaseContext() {
@@ -37,19 +43,37 @@ export function useDatabaseContext() {
   return ctx
 }
 
-export function DatabaseProvider({ libraryId, databaseId, accessToken, children }) {
-  const [databases, setDatabases]       = useState([])
-  const [loading, setLoading]           = useState(true)
-  const [error, setError]               = useState(null)
-  const [activeDbId, setActiveDbId]     = useState(null)
-  const [items, setItems]               = useState([])
-  const [itemsLoading, setItemsLoading] = useState(false)
-  const [activeViewId, setActiveViewId] = useState(null)
-  const [relatedData, setRelatedData]   = useState({})
+// ─── Provider ─────────────────────────────────────────────────────
 
+export function DatabaseProvider({ libraryId, accessToken, children }) {
+  // Lista de databases desta biblioteca
+  const [databases, setDatabases]     = useState([])   // [{ folderId, schemaFileId, schema }]
+  const [loading, setLoading]         = useState(true)
+  const [error, setError]             = useState(null)
+
+  // Database aberto no momento
+  const [activeDbId, setActiveDbId]   = useState(null)
+  const [items, setItems]             = useState([])    // itens com _fileId
+  const [itemsLoading, setItemsLoading] = useState(false)
+
+  // View ativa
+  const [activeViewId, setActiveViewId] = useState(null)
+
+  // Dados de databases relacionados (para Relation / Rollup)
+  // { [databaseId]: { schema, items } }
+  const [relatedData, setRelatedData] = useState({})
+
+  // Ref para debounce de salvamento de schema
   const saveSchemaDebounce = useRef(null)
-  // Evita double-open em StrictMode / re-renders
-  const openingRef = useRef(null)
+
+  // ─── Helpers de Drive ─────────────────────────────────────────
+
+  function buildHeaders() {
+    return {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    }
+  }
 
   // ─── Carregar lista de databases ──────────────────────────────
 
@@ -57,73 +81,44 @@ export function DatabaseProvider({ libraryId, databaseId, accessToken, children 
     if (!libraryId || !accessToken) return
     setLoading(true)
     listDatabases(libraryId, accessToken)
-      .then(dbs => {
-        setDatabases(dbs)
-        setLoading(false)
-      })
-      .catch(err => {
-        setError(err.message)
-        setLoading(false)
-      })
+      .then(dbs => { setDatabases(dbs); setLoading(false) })
+      .catch(err => { setError(err.message); setLoading(false) })
   }, [libraryId, accessToken])
-
-  // ─── Auto-abrir database quando databaseId prop é fornecida ──
-
-  useEffect(() => {
-    if (!databaseId || databases.length === 0) return
-
-    // Aceita folderId ou schema.id
-    const db = databases.find(
-      d => d.folderId === databaseId || d.schema?.id === databaseId
-    )
-    if (!db || !db.schema?.id) return
-
-    const targetId = db.schema.id
-    // Só abre se for diferente do atual e não estiver já abrindo
-    if (targetId === activeDbId || openingRef.current === targetId) return
-
-    openDatabase(targetId)
-  // openDatabase é estável via useCallback — ok incluir
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [databaseId, databases])
 
   // ─── Abrir database ───────────────────────────────────────────
 
   const openDatabase = useCallback(async (dbId) => {
-    const db = databases.find(
-      d => d.schema?.id === dbId || d.folderId === dbId
-    )
-    if (!db || !db.schema) return
+    const db = databases.find(d => d.schema.id === dbId)
+    if (!db) return
 
-    openingRef.current = db.schema.id
-    setActiveDbId(db.schema.id)
-    setItems([])           // limpa itens anteriores
+    setActiveDbId(dbId)
     setItemsLoading(true)
 
+    // View padrão
     const firstView = db.schema.views?.[0]
     if (firstView) setActiveViewId(firstView.id)
 
     try {
       const rawItems = await listDatabaseItems(db.folderId, accessToken)
-      // Garante que todos os itens são objetos válidos
-      const validItems = (rawItems ?? []).filter(i => i && typeof i === 'object')
-      await loadRelatedDatabases(db.schema, validItems)
-      setItems(validItems)
+
+      // Carregar databases relacionados (de uma vez, sem duplicar)
+      await loadRelatedDatabases(db.schema, rawItems)
+
+      setItems(rawItems)
     } catch (err) {
-      console.error('[DatabaseContext] Erro ao carregar itens:', err)
       setError(err.message)
     } finally {
       setItemsLoading(false)
-      openingRef.current = null
     }
   }, [databases, accessToken])
 
   // ─── Carregar databases relacionados ─────────────────────────
 
   async function loadRelatedDatabases(schema, currentItems) {
-    const relationProps = (schema?.properties ?? []).filter(p => p.type === PROPERTY_TYPES.RELATION)
-    const rollupProps   = (schema?.properties ?? []).filter(p => p.type === PROPERTY_TYPES.ROLLUP)
+    const relationProps = (schema.properties ?? []).filter(p => p.type === PROPERTY_TYPES.RELATION)
+    const rollupProps   = (schema.properties ?? []).filter(p => p.type === PROPERTY_TYPES.ROLLUP)
 
+    // IDs únicos dos databases que precisam ser carregados
     const needed = new Set()
     relationProps.forEach(p => { if (p.targetDatabaseId) needed.add(p.targetDatabaseId) })
     rollupProps.forEach(p => {
@@ -132,62 +127,55 @@ export function DatabaseProvider({ libraryId, databaseId, accessToken, children 
     })
 
     for (const dbId of needed) {
-      if (relatedData[dbId]) continue
-      const db = databases.find(d => d.schema?.id === dbId)
+      if (relatedData[dbId]) continue   // já carregado
+      const db = databases.find(d => d.schema.id === dbId)
       if (!db) continue
       try {
         const relItems = await listDatabaseItems(db.folderId, accessToken)
-        setRelatedData(prev => ({ ...prev, [dbId]: { schema: db.schema, items: relItems ?? [] } }))
-      } catch { /* silencioso */ }
+        setRelatedData(prev => ({ ...prev, [dbId]: { schema: db.schema, items: relItems } }))
+      } catch { /* ignora silenciosamente */ }
     }
   }
 
-  // ─── Computed items com guards ────────────────────────────────
+  // ─── Computed items (fórmulas + rollups) ──────────────────────
 
   function getComputedItems(rawItems, schema) {
-    if (!schema || !Array.isArray(rawItems)) return []
+    if (!schema || !Array.isArray(rawItems)) return rawItems ?? []
     return rawItems
-      .filter(item => item && typeof item === 'object' && item.properties !== undefined)
+      .filter(item => item != null && typeof item === 'object')
       .map(item => {
         try {
           return computeDerivedValues(item, schema, rawItems, relatedData)
         } catch {
-          return item
+          return { ...item, _computed: {} }
         }
       })
   }
 
-  // ─── Derivações com guards ────────────────────────────────────
+  // ─── Database ativo e view ativa ─────────────────────────────
 
-  const activeDatabase = databases.find(d => d.schema?.id === activeDbId) ?? null
+  const activeDatabase = databases.find(d => d.schema.id === activeDbId) ?? null
   const activeSchema   = activeDatabase?.schema ?? null
   const activeView     = activeSchema?.views?.find(v => v.id === activeViewId) ?? null
 
-  const computedItems = getComputedItems(items, activeSchema)
+  // Items com valores computados
+  const computedItems  = activeSchema
+    ? getComputedItems(items, activeSchema)
+    : items
 
-  const filteredItems = (() => {
-    if (!activeView || !activeSchema) return computedItems
-    try {
-      return applySorts(
-        applyFilters(computedItems, activeView.filters ?? [], activeSchema.properties ?? []),
-        activeView.sorts ?? [],
-        activeSchema.properties ?? [],
+  // Aplicar filtros + ordenação da view ativa
+  const filteredItems = activeView
+    ? applySorts(
+        applyFilters(computedItems, activeView.filters, activeSchema?.properties ?? []),
+        activeView.sorts,
+        activeSchema?.properties ?? [],
       )
-    } catch {
-      return computedItems
-    }
-  })()
+    : computedItems
 
-  const groupedItems = (() => {
-    if (!activeView || !activeSchema) {
-      return [{ key: '__all__', label: 'Todos', color: null, items: filteredItems }]
-    }
-    try {
-      return applyGrouping(filteredItems, activeView.groupBy, activeSchema.properties ?? [])
-    } catch {
-      return [{ key: '__all__', label: 'Todos', color: null, items: filteredItems }]
-    }
-  })()
+  // Agrupamento
+  const groupedItems = activeView
+    ? applyGrouping(filteredItems, activeView.groupBy, activeSchema?.properties ?? [])
+    : [{ key: '__all__', label: 'Todos', color: null, items: filteredItems }]
 
   // ─── CRUD de databases ────────────────────────────────────────
 
@@ -197,13 +185,18 @@ export function DatabaseProvider({ libraryId, databaseId, accessToken, children 
     return newDb
   }
 
-  // ─── CRUD de schema ───────────────────────────────────────────
+  // ─── CRUD de schema (propriedades, views) ─────────────────────
 
   function scheduleSchemaUpdate(newSchema) {
     if (!activeDatabase) return
+    // Atualiza state imediatamente para UI responsiva
     setDatabases(prev =>
-      prev.map(d => d.schema?.id === activeDbId ? { ...d, schema: newSchema } : d)
+      prev.map(d => d.schema.id === activeDbId
+        ? { ...d, schema: newSchema }
+        : d
+      )
     )
+    // Debounce para salvar no Drive (1.5s)
     clearTimeout(saveSchemaDebounce.current)
     saveSchemaDebounce.current = setTimeout(async () => {
       try {
@@ -214,67 +207,94 @@ export function DatabaseProvider({ libraryId, databaseId, accessToken, children 
     }, 1500)
   }
 
+  // Propriedades
+
   function addProperty(name, type, extras = {}) {
     if (!activeSchema) return
     const newProp = createProperty(name, type, extras)
     newProp.order = activeSchema.properties.length
-    scheduleSchemaUpdate({ ...activeSchema, properties: [...activeSchema.properties, newProp] })
+    const newSchema = {
+      ...activeSchema,
+      properties: [...activeSchema.properties, newProp],
+    }
+    scheduleSchemaUpdate(newSchema)
     return newProp
   }
 
   function updateProperty(propId, patch) {
     if (!activeSchema) return
-    scheduleSchemaUpdate({
+    const newSchema = {
       ...activeSchema,
-      properties: activeSchema.properties.map(p => p.id === propId ? { ...p, ...patch } : p),
-    })
+      properties: activeSchema.properties.map(p =>
+        p.id === propId ? { ...p, ...patch } : p
+      ),
+    }
+    scheduleSchemaUpdate(newSchema)
   }
 
   function deleteProperty(propId) {
     if (!activeSchema) return
-    scheduleSchemaUpdate({
+    const newSchema = {
       ...activeSchema,
-      properties: activeSchema.properties.filter(p => p.id !== propId).map((p, i) => ({ ...p, order: i })),
-    })
+      properties: activeSchema.properties
+        .filter(p => p.id !== propId)
+        .map((p, i) => ({ ...p, order: i })),
+    }
+    scheduleSchemaUpdate(newSchema)
   }
 
   function reorderProperties(orderedIds) {
     if (!activeSchema) return
     const map = Object.fromEntries(activeSchema.properties.map(p => [p.id, p]))
-    scheduleSchemaUpdate({
+    const newSchema = {
       ...activeSchema,
       properties: orderedIds.map((id, i) => ({ ...map[id], order: i })),
-    })
+    }
+    scheduleSchemaUpdate(newSchema)
   }
+
+  // Views
 
   function addView(name, type) {
     if (!activeSchema) return
     const newView = createView(name, type)
     newView.order = activeSchema.views.length
-    scheduleSchemaUpdate({ ...activeSchema, views: [...activeSchema.views, newView] })
+    const newSchema = {
+      ...activeSchema,
+      views: [...activeSchema.views, newView],
+    }
+    scheduleSchemaUpdate(newSchema)
     setActiveViewId(newView.id)
     return newView
   }
 
   function updateView(viewId, patch) {
     if (!activeSchema) return
-    scheduleSchemaUpdate({
+    const newSchema = {
       ...activeSchema,
-      views: activeSchema.views.map(v => v.id === viewId ? { ...v, ...patch } : v),
-    })
+      views: activeSchema.views.map(v =>
+        v.id === viewId ? { ...v, ...patch } : v
+      ),
+    }
+    scheduleSchemaUpdate(newSchema)
   }
 
   function deleteView(viewId) {
     if (!activeSchema) return
     const remaining = activeSchema.views.filter(v => v.id !== viewId)
-    scheduleSchemaUpdate({ ...activeSchema, views: remaining })
+    const newSchema  = { ...activeSchema, views: remaining }
+    scheduleSchemaUpdate(newSchema)
     if (activeViewId === viewId) setActiveViewId(remaining[0]?.id ?? null)
   }
+
+  // Coloração condicional da view ativa
 
   function updateConditionalColors(rules) {
     if (!activeView) return
     updateView(activeViewId, { conditionalColors: rules })
   }
+
+  // Templates (Fase 4)
 
   function addTemplate(name, defaultProperties = {}, blocks = []) {
     if (!activeSchema) return
@@ -293,22 +313,32 @@ export function DatabaseProvider({ libraryId, databaseId, accessToken, children 
   async function addItem(initialProps = {}, templateId = null) {
     if (!activeDatabase || !activeSchema) return
 
+    // Mesclar props do template se fornecido
     let mergedProps = { ...initialProps }
     if (templateId) {
       const tpl = (activeSchema.templates ?? []).find(t => t.id === templateId)
-      if (tpl) mergedProps = { ...tpl.defaultProperties, ...initialProps }
+      if (tpl) {
+        mergedProps = { ...tpl.defaultProperties, ...initialProps }
+      }
     }
 
+    // Inicializar a prop título se não vier preenchida
     const titleProp = activeSchema.properties.find(p => p.type === PROPERTY_TYPES.TITLE)
     if (titleProp && !mergedProps[titleProp.id]) {
       mergedProps[titleProp.id] = { type: PROPERTY_TYPES.TITLE, value: '' }
     }
 
     const { item: newItem, schema: updatedSchema } =
-      await createDatabaseItem_drive(activeDatabase.folderId, activeSchema, mergedProps, accessToken)
+      await createDatabaseItem_drive(
+        activeDatabase.folderId,
+        activeSchema,
+        mergedProps,
+        accessToken,
+      )
 
     setItems(prev => [...prev, newItem])
 
+    // Atualiza schema se o contador de unique_id mudou
     if (updatedSchema._nextUniqueId !== activeSchema._nextUniqueId) {
       scheduleSchemaUpdate(updatedSchema)
     }
@@ -334,34 +364,35 @@ export function DatabaseProvider({ libraryId, databaseId, accessToken, children 
     setItems(prev => prev.filter(i => i.id !== itemId))
   }
 
+  // Utilitário para CalendarView — atualiza a data de um item rapidamente
   async function updateItemDate(item, datePropId, newDateStr) {
-    await updateItem({
+    const updated = {
       ...item,
       properties: {
         ...item.properties,
         [datePropId]: { type: PROPERTY_TYPES.DATE, value: newDateStr },
       },
-    })
+    }
+    await updateItem(updated)
   }
 
-  // ─── Helpers ─────────────────────────────────────────────────
+  // ─── Coloração condicional por item ──────────────────────────
 
   function getItemColor(item) {
-    if (!activeView?.conditionalColors?.length || !activeSchema || !item) return null
-    try {
-      return evaluateConditionalColor(item, activeView.conditionalColors, activeSchema, computedItems)
-    } catch {
-      return null
-    }
+    if (!activeView?.conditionalColors?.length || !activeSchema) return null
+    return evaluateConditionalColor(item, activeView.conditionalColors, activeSchema, computedItems)
   }
 
+  // ─── Valor de células computadas ─────────────────────────────
+
   function getComputedValue(item, propId) {
-    return item?._computed?.[propId] ?? null
+    return item._computed?.[propId] ?? null
   }
 
   // ─── Context value ────────────────────────────────────────────
 
   const value = {
+    // Estado
     databases,
     loading,
     error,
@@ -377,9 +408,11 @@ export function DatabaseProvider({ libraryId, databaseId, accessToken, children 
     itemsLoading,
     relatedData,
 
+    // Ações — databases
     openDatabase,
     addDatabase,
 
+    // Ações — schema
     addProperty,
     updateProperty,
     deleteProperty,
@@ -391,11 +424,13 @@ export function DatabaseProvider({ libraryId, databaseId, accessToken, children 
     updateTemplates,
     addTemplate,
 
+    // Ações — itens
     addItem,
     updateItem,
     deleteItem,
     updateItemDate,
 
+    // Helpers
     getItemTitle: (item) => getItemTitle(item, activeSchema?.properties ?? []),
     getItemColor,
     getComputedValue,
