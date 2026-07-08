@@ -33,45 +33,6 @@ export function AuthProvider({ children }) {
     fetchUserInfo(accessToken)
   }
 
-  useEffect(() => {
-    function loadGapi() {
-      if (!window.gapi) { setTimeout(loadGapi, 200); return }
-      window.gapi.load('client', async () => {
-        await window.gapi.client.init({})
-        await window.gapi.client.load('https://www.googleapis.com/discovery/v1/apis/drive/v3/rest')
-        setGapiReady(true)
-      })
-    }
-    loadGapi()
-  }, [])
-
-  useEffect(() => {
-    function loadGis() {
-      if (!window.google?.accounts?.oauth2) { setTimeout(loadGis, 200); return }
-
-      initTokenClient(GOOGLE_CLIENT_ID, DRIVE_SCOPE, onTokenReceived, () => { setLoading(false) })
-      setGisReady(true)
-
-      const saved     = localStorage.getItem(TOKEN_KEY)
-      const savedTime = parseInt(localStorage.getItem(TOKEN_TIME_KEY) || '0')
-      const age       = Date.now() - savedTime
-
-      if (saved && age < TOKEN_TTL_MS) {
-        setToken(saved)
-        setAccessToken(saved)
-        fetchUserInfo(saved)
-      } else {
-        clearSavedToken()
-        setTimeout(() => { try { requestToken('') } catch {} }, 800)
-      }
-    }
-    loadGis()
-  }, [])
-
-  useEffect(() => {
-    if (gapiReady && gisReady) setLoading(false)
-  }, [gapiReady, gisReady])
-
   async function fetchUserInfo(accessToken) {
     try {
       const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
@@ -86,7 +47,71 @@ export function AuthProvider({ children }) {
     }
   }
 
-  const signIn = useCallback(() => { setError(null); requestToken('consent') }, [])
+  async function validateAndRestoreToken(saved) {
+    try {
+      const res = await fetch('https://www.googleapis.com/drive/v3/files?pageSize=1', {
+        headers: { Authorization: `Bearer ${saved}` }
+      })
+      if (res.ok) {
+        setToken(saved)
+        setAccessToken(saved)
+        fetchUserInfo(saved)
+      } else {
+        clearSavedToken()
+        setTimeout(() => { try { requestToken('') } catch {} }, 800)
+      }
+    } catch {
+      clearSavedToken()
+      setTimeout(() => { try { requestToken('') } catch {} }, 800)
+    }
+  }
+
+  useEffect(() => {
+    function loadGapi() {
+      if (!window.gapi) { setTimeout(loadGapi, 200); return }
+      window.gapi.load('client', async () => {
+        await window.gapi.client.init({})
+        await window.gapi.client.load(
+          'https://www.googleapis.com/discovery/v1/apis/drive/v3/rest'
+        )
+        setGapiReady(true)
+      })
+    }
+    loadGapi()
+  }, [])
+
+  useEffect(() => {
+    function loadGis() {
+      if (!window.google?.accounts?.oauth2) { setTimeout(loadGis, 200); return }
+
+      initTokenClient(GOOGLE_CLIENT_ID, DRIVE_SCOPE, onTokenReceived, () => {
+        setLoading(false)
+      })
+
+      setGisReady(true)
+
+      const saved     = localStorage.getItem(TOKEN_KEY)
+      const savedTime = parseInt(localStorage.getItem(TOKEN_TIME_KEY) || '0')
+      const age       = Date.now() - savedTime
+
+      if (saved && age < TOKEN_TTL_MS) {
+        validateAndRestoreToken(saved)
+      } else {
+        clearSavedToken()
+        setTimeout(() => { try { requestToken('') } catch {} }, 800)
+      }
+    }
+    loadGis()
+  }, [])
+
+  useEffect(() => {
+    if (gapiReady && gisReady) setLoading(false)
+  }, [gapiReady, gisReady])
+
+  const signIn = useCallback(() => {
+    setError(null)
+    requestToken('consent')
+  }, [])
 
   const signOut = useCallback(() => {
     if (token && window.google?.accounts?.oauth2) {
