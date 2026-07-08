@@ -1,17 +1,9 @@
 /**
- * Sidebar.jsx — Fase 5
- *
- * Índice geral da biblioteca:
- *  - Hierarquia aninhada de páginas e databases
- *  - Drag & drop para reordenar (via @dnd-kit, já instalado na Fase 1)
- *  - Favoritos no topo
- *  - Busca dentro da sidebar
- *  - Modo foco (ocultar sidebar)
- *
- * Não usa <form>. IDs são UUID v4.
+ * Sidebar.jsx — Fase 5 + fix navegação de databases
  */
 
-import { useState, useRef } from 'react'
+import { useState } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
 import {
   DndContext, closestCenter, PointerSensor, useSensor, useSensors,
 } from '@dnd-kit/core'
@@ -21,31 +13,29 @@ import {
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import {
-  BookOpen, Database, Star, StarOff, ChevronRight, ChevronDown,
+  Database, Star, StarOff, ChevronRight, ChevronDown,
   Search, X, PanelLeftClose, PanelLeftOpen, Plus, GripVertical,
 } from 'lucide-react'
 import { useNavigation } from '../../contexts/NavigationContext.jsx'
 
-// ─── Cores do tema biblioteca ─────────────────────────────────────
-
 const T = {
-  fundo:       '#1C1610',
-  superficie:  '#2A1F14',
-  card:        '#F5EDD6',
-  texto:       '#2C1810',
-  textoSuave:  '#6B4C3B',
-  destaque:    '#8B4513',
-  ouro:        '#C9A84C',
-  borda:       '#5C3D1E',
+  fundo:      '#1C1610',
+  superficie: '#2A1F14',
+  card:       '#F5EDD6',
+  textoSuave: '#6B4C3B',
+  destaque:   '#8B4513',
+  ouro:       '#C9A84C',
+  borda:      '#5C3D1E',
 }
 
-// ─── SortableSidebarItem — um item arrastável ─────────────────────
+// ─── SortableSidebarItem ──────────────────────────────────────────
 
 function SortableSidebarItem({ page, depth = 0 }) {
+  const navigate = useNavigate()
+  const { libId } = useParams()
   const {
     activePageId, navigateTo, toggleExpanded, expandedIds,
-    toggleFavorite, isFavorite,
-    pages,
+    toggleFavorite, isFavorite, pages,
   } = useNavigation()
 
   const {
@@ -59,16 +49,23 @@ function SortableSidebarItem({ page, depth = 0 }) {
     opacity: isDragging ? 0.4 : 1,
   }
 
-  const isActive   = activePageId === page.id
-  const isExpanded = expandedIds[page.id]
-  const hasChildren = page.children?.length > 0 ||
-    pages.some(p => p.parentId === page.id)
+  const isActive    = activePageId === page.id
+  const isExpanded  = expandedIds[page.id]
+  const hasChildren = page.children?.length > 0 || pages.some(p => p.parentId === page.id)
+  const icon        = page.icon || (page.type === 'database' ? '🗂️' : '📄')
 
-  const icon = page.icon || (page.type === 'database' ? '🗂️' : '📖')
+  function handleClick() {
+    if (page.type === 'database') {
+      navigate(`/biblioteca/${libId}/database/${page.folderId ?? page.id}`)
+    } else {
+      navigate(`/biblioteca/${libId}/pagina/${page.id}`)
+      navigateTo(page.id)
+    }
+    if (hasChildren) toggleExpanded(page.id)
+  }
 
   return (
     <div ref={setNodeRef} style={style}>
-      {/* Item row */}
       <div
         className="group flex items-center gap-1 px-2 py-1 rounded-md cursor-pointer select-none"
         style={{
@@ -76,12 +73,8 @@ function SortableSidebarItem({ page, depth = 0 }) {
           background: isActive ? `${T.ouro}22` : 'transparent',
           borderLeft: isActive ? `2px solid ${T.ouro}` : '2px solid transparent',
         }}
-        onClick={() => {
-          if (hasChildren) toggleExpanded(page.id)
-          navigateTo(page.id)
-        }}
+        onClick={handleClick}
       >
-        {/* Drag handle */}
         <span
           {...attributes}
           {...listeners}
@@ -92,7 +85,6 @@ function SortableSidebarItem({ page, depth = 0 }) {
           <GripVertical size={12} />
         </span>
 
-        {/* Expand arrow */}
         <span
           className="shrink-0"
           style={{ width: 14, color: T.textoSuave }}
@@ -100,14 +92,11 @@ function SortableSidebarItem({ page, depth = 0 }) {
         >
           {hasChildren
             ? (isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />)
-            : null
-          }
+            : null}
         </span>
 
-        {/* Icon */}
         <span className="shrink-0 text-sm leading-none">{icon}</span>
 
-        {/* Title */}
         <span
           className="flex-1 truncate text-sm font-serif"
           style={{ color: isActive ? T.ouro : T.card }}
@@ -115,7 +104,6 @@ function SortableSidebarItem({ page, depth = 0 }) {
           {page.title || 'Sem título'}
         </span>
 
-        {/* Favorite button */}
         <button
           className="opacity-0 group-hover:opacity-100 shrink-0 p-0.5 rounded hover:bg-white/10 transition-all"
           style={{ color: isFavorite(page.id) ? T.ouro : T.textoSuave }}
@@ -126,7 +114,6 @@ function SortableSidebarItem({ page, depth = 0 }) {
         </button>
       </div>
 
-      {/* Children */}
       {isExpanded && page.children?.length > 0 && (
         <SidebarLevel pages={page.children} depth={depth + 1} />
       )}
@@ -134,7 +121,7 @@ function SortableSidebarItem({ page, depth = 0 }) {
   )
 }
 
-// ─── SidebarLevel — nível de árvore com DnD ──────────────────────
+// ─── SidebarLevel ─────────────────────────────────────────────────
 
 function SidebarLevel({ pages, depth = 0 }) {
   const { reorderPages, pages: allPages } = useNavigation()
@@ -146,12 +133,10 @@ function SidebarLevel({ pages, depth = 0 }) {
   function handleDragEnd(event) {
     const { active, over } = event
     if (!over || active.id === over.id) return
-
     const ids    = pages.map(p => p.id)
     const oldIdx = ids.indexOf(active.id)
     const newIdx = ids.indexOf(over.id)
     if (oldIdx === -1 || newIdx === -1) return
-
     const reordered = arrayMove(ids, oldIdx, newIdx)
     const updatedAll = allPages.map(p => {
       const idx = reordered.indexOf(p.id)
@@ -162,11 +147,7 @@ function SidebarLevel({ pages, depth = 0 }) {
   }
 
   return (
-    <DndContext
-      sensors={sensors}
-      collisionDetection={closestCenter}
-      onDragEnd={handleDragEnd}
-    >
+    <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
       <SortableContext items={pages.map(p => p.id)} strategy={verticalListSortingStrategy}>
         {pages.map(page => (
           <SortableSidebarItem key={page.id} page={page} depth={depth} />
@@ -176,22 +157,19 @@ function SidebarLevel({ pages, depth = 0 }) {
   )
 }
 
-// ─── FavoritesSection ────────────────────────────────────────────
+// ─── FavoritesSection ─────────────────────────────────────────────
 
 function FavoritesSection() {
+  const navigate = useNavigate()
+  const { libId } = useParams()
   const { favorites, pages, navigateTo, activePageId } = useNavigation()
-  const favPages = favorites
-    .map(id => pages.find(p => p.id === id))
-    .filter(Boolean)
 
+  const favPages = favorites.map(id => pages.find(p => p.id === id)).filter(Boolean)
   if (favPages.length === 0) return null
 
   return (
     <div className="mb-3">
-      <p
-        className="px-3 py-1 text-xs font-semibold tracking-widest uppercase"
-        style={{ color: T.textoSuave }}
-      >
+      <p className="px-3 py-1 text-xs font-semibold tracking-widest uppercase" style={{ color: T.textoSuave }}>
         Favoritos
       </p>
       {favPages.map(page => {
@@ -199,14 +177,14 @@ function FavoritesSection() {
         return (
           <button
             key={page.id}
-            onClick={() => navigateTo(page.id)}
-            className="w-full flex items-center gap-2 px-3 py-1 rounded-md text-left"
-            style={{
-              color: isActive ? T.ouro : T.card,
-              background: isActive ? `${T.ouro}22` : 'transparent',
+            onClick={() => {
+              navigate(`/biblioteca/${libId}/pagina/${page.id}`)
+              navigateTo(page.id)
             }}
+            className="w-full flex items-center gap-2 px-3 py-1 rounded-md text-left"
+            style={{ color: isActive ? T.ouro : T.card, background: isActive ? `${T.ouro}22` : 'transparent' }}
           >
-            <Star size={10} fill="currentColor" style={{ color: T.ouro, shrink: 0 }} />
+            <Star size={10} fill="currentColor" style={{ color: T.ouro }} />
             <span className="truncate text-sm font-serif">
               {page.icon} {page.title || 'Sem título'}
             </span>
@@ -218,9 +196,11 @@ function FavoritesSection() {
   )
 }
 
-// ─── SearchResults — resultado da busca na sidebar ───────────────
+// ─── SearchResults ────────────────────────────────────────────────
 
 function SearchResults() {
+  const navigate = useNavigate()
+  const { libId } = useParams()
   const { sidebarFiltered, navigateTo, activePageId } = useNavigation()
   if (!sidebarFiltered) return null
 
@@ -239,11 +219,14 @@ function SearchResults() {
         return (
           <button
             key={page.id}
-            onClick={() => navigateTo(page.id)}
+            onClick={() => {
+              navigate(`/biblioteca/${libId}/pagina/${page.id}`)
+              navigateTo(page.id)
+            }}
             className="w-full flex items-center gap-2 px-3 py-1.5 rounded-md text-left hover:bg-white/5"
             style={{ color: isActive ? T.ouro : T.card }}
           >
-            <span className="shrink-0 text-sm">{page.icon || '📖'}</span>
+            <span className="shrink-0 text-sm">{page.icon || '📄'}</span>
             <span className="truncate text-sm font-serif">{page.title || 'Sem título'}</span>
           </button>
         )
@@ -255,6 +238,8 @@ function SearchResults() {
 // ─── Sidebar (componente raiz) ────────────────────────────────────
 
 export default function Sidebar({ onNewPage, onNewDatabase }) {
+  const navigate = useNavigate()
+  const { libId } = useParams()
   const {
     sidebarOpen, toggleSidebar,
     pageTree, databases,
@@ -263,18 +248,11 @@ export default function Sidebar({ onNewPage, onNewDatabase }) {
     navigateTo, activePageId,
   } = useNavigation()
 
-  // ─── Fechado: apenas botão para reabrir ──────────────────────
-
   if (!sidebarOpen) {
     return (
       <div
         className="flex flex-col items-center pt-4 gap-3"
-        style={{
-          width: 40,
-          background: T.superficie,
-          borderRight: `1px solid ${T.borda}`,
-          minHeight: '100vh',
-        }}
+        style={{ width: 40, background: T.superficie, borderRight: `1px solid ${T.borda}`, minHeight: '100vh' }}
       >
         <button
           onClick={toggleSidebar}
@@ -288,22 +266,18 @@ export default function Sidebar({ onNewPage, onNewDatabase }) {
     )
   }
 
-  // ─── Aberto ──────────────────────────────────────────────────
-
   return (
     <div
       className="flex flex-col"
       style={{
-        width: 240,
-        minWidth: 240,
-        maxWidth: 240,
+        width: 240, minWidth: 240, maxWidth: 240,
         background: T.superficie,
         borderRight: `1px solid ${T.borda}`,
         minHeight: '100vh',
         overflow: 'hidden',
       }}
     >
-      {/* Header da sidebar */}
+      {/* Header */}
       <div
         className="flex items-center justify-between px-3 py-3"
         style={{ borderBottom: `1px solid ${T.borda}` }}
@@ -323,16 +297,13 @@ export default function Sidebar({ onNewPage, onNewDatabase }) {
 
       {/* Busca */}
       <div className="px-2 py-2" style={{ borderBottom: `1px solid ${T.borda}` }}>
-        <div
-          className="flex items-center gap-2 px-2 py-1.5 rounded-md"
-          style={{ background: `${T.fundo}88` }}
-        >
-          <Search size={12} style={{ color: T.textoSuave, shrink: 0 }} />
+        <div className="flex items-center gap-2 px-2 py-1.5 rounded-md" style={{ background: `${T.fundo}88` }}>
+          <Search size={12} style={{ color: T.textoSuave }} />
           <input
             type="text"
             value={sidebarSearch}
             onChange={e => setSidebarSearch(e.target.value)}
-            placeholder="Buscar páginas…"
+            placeholder="Buscar páginas..."
             className="flex-1 bg-transparent text-sm outline-none font-serif"
             style={{ color: T.card }}
           />
@@ -344,53 +315,43 @@ export default function Sidebar({ onNewPage, onNewDatabase }) {
         </div>
       </div>
 
-      {/* Conteúdo scrollável */}
+      {/* Conteúdo */}
       <div className="flex-1 overflow-y-auto py-2" style={{ scrollbarWidth: 'thin' }}>
-        {/* Resultados de busca */}
         {sidebarFiltered !== null ? (
           <SearchResults />
         ) : (
           <>
-            {/* Favoritos */}
             <FavoritesSection />
 
-            {/* Páginas */}
             {pageTree.length > 0 && (
               <div className="mb-2">
-                <p
-                  className="px-3 py-1 text-xs font-semibold tracking-widest uppercase"
-                  style={{ color: T.textoSuave }}
-                >
+                <p className="px-3 py-1 text-xs font-semibold tracking-widest uppercase" style={{ color: T.textoSuave }}>
                   Páginas
                 </p>
                 <SidebarLevel pages={pageTree} depth={0} />
               </div>
             )}
 
-            {/* Databases */}
             {databases?.length > 0 && (
               <div className="mb-2">
                 <div className="my-2 mx-3" style={{ borderTop: `1px solid ${T.borda}` }} />
-                <p
-                  className="px-3 py-1 text-xs font-semibold tracking-widest uppercase"
-                  style={{ color: T.textoSuave }}
-                >
+                <p className="px-3 py-1 text-xs font-semibold tracking-widest uppercase" style={{ color: T.textoSuave }}>
                   Estantes
                 </p>
                 {databases.map(db => {
-                  const isActive = activePageId === db.schema.id
+                  const isActive = activePageId === db.folderId
                   return (
                     <button
-                      key={db.schema.id}
-                      onClick={() => navigateTo(db.schema.id)}
-                      className="w-full flex items-center gap-2 px-3 py-1.5 rounded-md text-left hover:bg-white/5"
+                      key={db.folderId}
+                      onClick={() => navigate(`/biblioteca/${libId}/database/${db.folderId}`)}
+                      className="w-full flex items-center gap-2 px-3 py-1.5 rounded-md text-left hover:bg-white/5 transition-colors"
                       style={{
                         color: isActive ? T.ouro : T.card,
                         background: isActive ? `${T.ouro}22` : 'transparent',
                       }}
                     >
-                      <span className="shrink-0 text-sm">{db.schema.icon || '🗂️'}</span>
-                      <span className="truncate text-sm font-serif">{db.schema.title}</span>
+                      <span className="shrink-0 text-sm">{db.schema?.icon || '🗂️'}</span>
+                      <span className="truncate text-sm font-serif">{db.schema?.title || 'Estante'}</span>
                     </button>
                   )
                 })}
@@ -400,11 +361,8 @@ export default function Sidebar({ onNewPage, onNewDatabase }) {
         )}
       </div>
 
-      {/* Footer — ações rápidas */}
-      <div
-        className="flex items-center gap-1 px-2 py-2"
-        style={{ borderTop: `1px solid ${T.borda}` }}
-      >
+      {/* Footer */}
+      <div className="flex items-center gap-1 px-2 py-2" style={{ borderTop: `1px solid ${T.borda}` }}>
         <button
           onClick={onNewPage}
           className="flex-1 flex items-center gap-1.5 px-2 py-1.5 rounded-md hover:bg-white/10 transition-colors text-left"
@@ -418,7 +376,7 @@ export default function Sidebar({ onNewPage, onNewDatabase }) {
           onClick={onNewDatabase}
           className="flex items-center gap-1.5 px-2 py-1.5 rounded-md hover:bg-white/10 transition-colors"
           style={{ color: T.textoSuave }}
-          title="Nova estante (database)"
+          title="Nova estante"
         >
           <Database size={13} />
         </button>
