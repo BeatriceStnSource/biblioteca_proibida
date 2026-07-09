@@ -53,12 +53,12 @@ export function createDatabaseSchema({ title = 'Novo Database', icon = '🗂️'
         sorts: [],
         groupBy: null,
         hiddenProperties: [],
-        conditionalColors: [],
+        conditionalColors: [],   // Fase 4: regras de coloração
         order: 0,
       },
     ],
-    templates: [],
-    _nextUniqueId: 1,
+    templates: [],               // Fase 4: templates de itens
+    _nextUniqueId: 1,            // Fase 4: contador de unique_id
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   }
@@ -98,7 +98,7 @@ export function createProperty(name, type, extras = {}) {
     base.format = extras.format ?? 'number'
   }
   if (type === PROPERTY_TYPES.UNIQUE_ID) {
-    base.prefix = extras.prefix ?? ''
+    base.prefix = extras.prefix ?? ''    // ex: 'LIVRO' → LIVRO-001
   }
   if (type === PROPERTY_TYPES.RELATION) {
     base.targetDatabaseId    = extras.targetDatabaseId ?? null
@@ -107,9 +107,9 @@ export function createProperty(name, type, extras = {}) {
     base.backPropertyName    = extras.backPropertyName ?? ''
   }
   if (type === PROPERTY_TYPES.ROLLUP) {
-    base.relationPropId   = extras.relationPropId  ?? null
-    base.targetPropertyId = extras.targetPropertyId ?? null
-    base.function         = extras.function ?? 'count'
+    base.relationPropId  = extras.relationPropId  ?? null  // ID da prop Relation neste db
+    base.targetPropertyId = extras.targetPropertyId ?? null // ID da prop no db alvo
+    base.function        = extras.function ?? 'count'
   }
   if (type === PROPERTY_TYPES.FORMULA) {
     base.formula = extras.formula ?? ''
@@ -131,21 +131,25 @@ export function createView(name, type) {
     sorts: [],
     groupBy: null,
     hiddenProperties: [],
-    conditionalColors: [],
+    conditionalColors: [],   // Fase 4
     order: 999,
   }
 }
+
+// ─── Templates de database (Fase 4) ──────────────────────────────
 
 export function createTemplate(name, defaultProperties = {}, blocks = []) {
   return {
     id: crypto.randomUUID(),
     name,
     icon: '📝',
-    defaultProperties,
+    defaultProperties,  // { propId: { type, value } }
     blocks,
     createdAt: new Date().toISOString(),
   }
 }
+
+// ─── Operações de Database no Drive ──────────────────────────────
 
 async function ensureDatabasesFolder(libraryId) {
   const files = await listFiles(libraryId)
@@ -211,10 +215,15 @@ export async function listDatabaseItems(dbFolderId) {
   return items.filter(Boolean)
 }
 
+/**
+ * Cria um item novo — atribui unique_id se houver propriedade do tipo.
+ * Retorna { item, schemaAtualizado } pois o contador _nextUniqueId muda.
+ */
 export async function createDatabaseItem_drive(dbFolderId, schema, initialProps = {}) {
   let updatedSchema = schema
   const finalProps = { ...initialProps }
 
+  // Atribuir unique_id automaticamente
   const uniqueProp = schema.properties.find(p => p.type === PROPERTY_TYPES.UNIQUE_ID)
   if (uniqueProp && !finalProps[uniqueProp.id]) {
     const counter = schema._nextUniqueId ?? 1
@@ -241,6 +250,15 @@ export async function deleteDatabaseItem(fileId) {
   await deleteFile(fileId)
 }
 
+// ─── Fórmulas: computar valores derivados ────────────────────────
+
+/**
+ * Dado um item e o schema, adiciona ao objeto item os valores
+ * calculados das propriedades formula e rollup.
+ *
+ * Retorna um novo objeto (não muta o original).
+ * Os valores calculados ficam em item._computed = { propId: valor }
+ */
 export function computeDerivedValues(item, schema, allItems = [], relatedData = {}) {
   // Guard: item inválido ou sem properties
   if (!item || typeof item !== 'object' || !item.properties) {
@@ -266,6 +284,8 @@ export function computeDerivedValues(item, schema, allItems = [], relatedData = 
   return { ...item, _computed: computed }
 }
 
+// ─── Filtros ──────────────────────────────────────────────────────
+
 export function applyFilters(items, filters, properties) {
   if (!filters || filters.length === 0) return items
 
@@ -283,6 +303,7 @@ function testFilter(item, filter, properties) {
   const prop = properties.find(p => p.id === filter.propertyId)
   if (!prop) return true
 
+  // Suporte a valores computados (formula/rollup)
   let value
   if (prop.type === PROPERTY_TYPES.FORMULA || prop.type === PROPERTY_TYPES.ROLLUP) {
     value = item._computed?.[prop.id] ?? null
@@ -299,20 +320,26 @@ function testFilter(item, filter, properties) {
     case PROPERTY_TYPES.UNIQUE_ID:
     case PROPERTY_TYPES.FORMULA:
       return testText(String(value ?? ''), filter)
+
     case PROPERTY_TYPES.NUMBER:
     case PROPERTY_TYPES.ROLLUP:
       return testNumber(value, filter)
+
     case PROPERTY_TYPES.SELECT:
     case PROPERTY_TYPES.STATUS:
       return testSelect(value, filter)
+
     case PROPERTY_TYPES.MULTISELECT:
       return testMultiselect(value, filter)
+
     case PROPERTY_TYPES.CHECKBOX:
       return testCheckbox(value, filter)
+
     case PROPERTY_TYPES.DATE:
     case PROPERTY_TYPES.CREATED_TIME:
     case PROPERTY_TYPES.EDITED_TIME:
       return testDate(value, filter)
+
     default:
       return true
   }
@@ -398,6 +425,8 @@ function testDate(dateStr, { operator, value }) {
   }
 }
 
+// ─── Ordenação ────────────────────────────────────────────────────
+
 export function applySorts(items, sorts, properties) {
   if (!sorts || sorts.length === 0) return items
 
@@ -406,6 +435,7 @@ export function applySorts(items, sorts, properties) {
       const prop = properties.find(p => p.id === sort.propertyId)
       if (!prop) continue
 
+      // Suporte a valores computados
       const isComputed = [PROPERTY_TYPES.FORMULA, PROPERTY_TYPES.ROLLUP].includes(prop.type)
       const aVal = isComputed
         ? a._computed?.[sort.propertyId] ?? null
@@ -431,6 +461,8 @@ export function applySorts(items, sorts, properties) {
     return 0
   })
 }
+
+// ─── Agrupamento ─────────────────────────────────────────────────
 
 export function applyGrouping(items, groupByPropId, properties) {
   if (!groupByPropId) return [{ key: '__all__', label: 'Todos', color: null, items }]
@@ -491,6 +523,8 @@ export function applyGrouping(items, groupByPropId, properties) {
   return Array.from(groups.values())
 }
 
+// ─── Cálculos de rodapé ───────────────────────────────────────────
+
 export function calcFooter(items, propertyId, calcType) {
   const values = items
     .map(item => item.properties?.[propertyId]?.value)
@@ -511,6 +545,8 @@ export function calcFooter(items, propertyId, calcType) {
   }
 }
 
+// ─── Helpers de display ───────────────────────────────────────────
+
 export function getItemTitle(item, properties) {
   const titleProp = properties.find(p => p.type === PROPERTY_TYPES.TITLE)
   if (!titleProp) return 'Sem título'
@@ -523,12 +559,14 @@ export function formatPropertyValue(value, prop) {
   switch (prop.type) {
     case PROPERTY_TYPES.CHECKBOX:
       return value ? '✓' : ''
+
     case PROPERTY_TYPES.DATE:
     case PROPERTY_TYPES.CREATED_TIME:
     case PROPERTY_TYPES.EDITED_TIME:
       try {
         return new Date(value).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' })
       } catch { return value }
+
     case PROPERTY_TYPES.NUMBER: {
       const n = Number(value)
       if (isNaN(n)) return String(value)
@@ -539,26 +577,33 @@ export function formatPropertyValue(value, prop) {
         default:         return n.toLocaleString('pt-BR')
       }
     }
+
     case PROPERTY_TYPES.SELECT:
     case PROPERTY_TYPES.STATUS: {
       const option = prop.options?.find(o => o.id === value)
       return option?.name ?? String(value)
     }
+
     case PROPERTY_TYPES.MULTISELECT: {
       const ids = Array.isArray(value) ? value : []
       return ids.map(id => prop.options?.find(o => o.id === id)?.name ?? id).join(', ')
     }
+
     case PROPERTY_TYPES.UNIQUE_ID:
       return String(value)
+
     case PROPERTY_TYPES.RELATION: {
+      // value é um array de { id, title }
       const items = Array.isArray(value) ? value : []
       return items.map(r => r.title ?? r.id).join(', ')
     }
+
     case PROPERTY_TYPES.FORMULA:
     case PROPERTY_TYPES.ROLLUP:
       if (typeof value === 'boolean') return value ? '✓' : ''
       if (value instanceof Date)      return value.toLocaleDateString('pt-BR')
       return String(value)
+
     default:
       return String(value)
   }
