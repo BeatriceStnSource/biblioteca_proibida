@@ -105,6 +105,7 @@ function AppShellInner({
       <Sidebar
         onNewPage={handleNewPage}
         onNewDatabase={onNewDatabase}
+        libraryId={libraryId}
       />
 
       {/* Área principal */}
