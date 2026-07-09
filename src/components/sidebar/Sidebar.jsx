@@ -30,9 +30,8 @@ const T = {
 
 // ─── SortableSidebarItem ──────────────────────────────────────────
 
-function SortableSidebarItem({ page, depth = 0 }) {
+function SortableSidebarItem({ page, depth = 0, libId }) {
   const navigate = useNavigate()
-  const { libId } = useParams()
   const {
     activePageId, navigateTo, toggleExpanded, expandedIds,
     toggleFavorite, isFavorite, pages,
@@ -115,7 +114,7 @@ function SortableSidebarItem({ page, depth = 0 }) {
       </div>
 
       {isExpanded && page.children?.length > 0 && (
-        <SidebarLevel pages={page.children} depth={depth + 1} />
+        <SidebarLevel pages={page.children} depth={depth + 1} libId={libId} />
       )}
     </div>
   )
@@ -123,7 +122,7 @@ function SortableSidebarItem({ page, depth = 0 }) {
 
 // ─── SidebarLevel ─────────────────────────────────────────────────
 
-function SidebarLevel({ pages, depth = 0 }) {
+function SidebarLevel({ pages, depth = 0, libId }) {
   const { reorderPages, pages: allPages } = useNavigation()
 
   const sensors = useSensors(useSensor(PointerSensor, {
@@ -150,7 +149,7 @@ function SidebarLevel({ pages, depth = 0 }) {
     <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
       <SortableContext items={pages.map(p => p.id)} strategy={verticalListSortingStrategy}>
         {pages.map(page => (
-          <SortableSidebarItem key={page.id} page={page} depth={depth} />
+          <SortableSidebarItem key={page.id} page={page} depth={depth} libId={libId} />
         ))}
       </SortableContext>
     </DndContext>
@@ -159,9 +158,8 @@ function SidebarLevel({ pages, depth = 0 }) {
 
 // ─── FavoritesSection ─────────────────────────────────────────────
 
-function FavoritesSection() {
+function FavoritesSection({ libId }) {
   const navigate = useNavigate()
-  const { libId } = useParams()
   const { favorites, pages, navigateTo, activePageId } = useNavigation()
 
   const favPages = favorites.map(id => pages.find(p => p.id === id)).filter(Boolean)
@@ -198,9 +196,8 @@ function FavoritesSection() {
 
 // ─── SearchResults ────────────────────────────────────────────────
 
-function SearchResults() {
+function SearchResults({ libId }) {
   const navigate = useNavigate()
-  const { libId } = useParams()
   const { sidebarFiltered, navigateTo, activePageId } = useNavigation()
   if (!sidebarFiltered) return null
 
@@ -237,9 +234,9 @@ function SearchResults() {
 
 // ─── Sidebar (componente raiz) ────────────────────────────────────
 
-export default function Sidebar({ onNewPage, onNewDatabase }) {
+export default function Sidebar({ onNewPage, onNewDatabase, libraryId }) {
   const navigate = useNavigate()
-  const { libId } = useParams()
+  const libId = libraryId
   const {
     sidebarOpen, toggleSidebar,
     pageTree, databases,
@@ -318,17 +315,17 @@ export default function Sidebar({ onNewPage, onNewDatabase }) {
       {/* Conteúdo */}
       <div className="flex-1 overflow-y-auto py-2" style={{ scrollbarWidth: 'thin' }}>
         {sidebarFiltered !== null ? (
-          <SearchResults />
+          <SearchResults libId={libId} />
         ) : (
           <>
-            <FavoritesSection />
+            <FavoritesSection libId={libId} />
 
             {pageTree.length > 0 && (
               <div className="mb-2">
                 <p className="px-3 py-1 text-xs font-semibold tracking-widest uppercase" style={{ color: T.textoSuave }}>
                   Páginas
                 </p>
-                <SidebarLevel pages={pageTree} depth={0} />
+                <SidebarLevel pages={pageTree} depth={0} libId={libId} />
               </div>
             )}
 
