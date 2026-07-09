@@ -45,7 +45,7 @@ export function useDatabaseContext() {
 
 // ─── Provider ─────────────────────────────────────────────────────
 
-export function DatabaseProvider({ libraryId, accessToken, children }) {
+export function DatabaseProvider({ libraryId, databaseId, accessToken, children }) {
   // Lista de databases desta biblioteca
   const [databases, setDatabases]     = useState([])   // [{ folderId, schemaFileId, schema }]
   const [loading, setLoading]         = useState(true)
