@@ -85,6 +85,18 @@ export function DatabaseProvider({ libraryId, accessToken, children }) {
       .catch(err => { setError(err.message); setLoading(false) })
   }, [libraryId, accessToken])
 
+  // ─── Auto-abrir database quando databaseId prop é fornecida ──
+
+  useEffect(() => {
+    if (!databaseId || databases.length === 0) return
+    const db = databases.find(
+      d => d.folderId === databaseId || d.schema?.id === databaseId
+    )
+    if (!db) return
+    const targetId = db.schema?.id ?? db.folderId
+    if (targetId) openDatabase(targetId)
+  }, [databaseId, databases])
+
   // ─── Abrir database ───────────────────────────────────────────
 
   const openDatabase = useCallback(async (dbId) => {
